@@ -62,5 +62,3 @@ management:
     export:
       otlp:
         enabled: false
-
-
