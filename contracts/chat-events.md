@@ -3,7 +3,7 @@
 
 Contract version: 0.2.0
 
-Status: Draft
+Status: Frozen for MVP
 
 ## 1. Overview
 
