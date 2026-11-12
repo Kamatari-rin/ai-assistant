@@ -1,0 +1,13 @@
+spring:
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+
+  flyway:
+    enabled: false
+
+management:
+  tracing:
+    export:
+      otlp:
+        enabled: false

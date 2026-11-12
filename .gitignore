@@ -34,3 +34,8 @@ build/
 
 # Private AI development workspace
 .ai/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
