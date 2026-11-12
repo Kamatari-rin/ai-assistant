@@ -53,3 +53,14 @@ management:
         otlp:
           endpoint: ${OTLP_TRACES_ENDPOINT:http://127.0.0.1:4318/v1/traces}
 
+  otlp:
+    metrics:
+      export:
+        enabled: false
+
+  logging:
+    export:
+      otlp:
+        enabled: false
+
+
