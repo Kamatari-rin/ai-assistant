@@ -337,7 +337,27 @@ Example:
 }
 ```
 
-The client may display an approval interface for the proposal.
+The client may display proposal details while the invocation
+is streaming.
+
+Confirmation controls must remain disabled until the client
+receives a valid terminal done event for that invocation.
+
+If the invocation ends with error, is cancelled, or terminates
+without done, the client must not offer confirmation for a
+proposal received from that incomplete stream.
+
+The backend independently verifies that the originating
+invocation has successfully completed and that its completion
+state has been persisted.
+
+A proposal from an active, failed or cancelled invocation
+must not initiate a business mutation.
+
+The backend must not trust the client to enforce this rule.
+
+A proposal retains its own lifecycle. An unused PENDING proposal
+may subsequently expire.
 
 Explicit confirmation uses:
 
@@ -366,6 +386,23 @@ The proposalId is the stable downstream business idempotency key.
 Indicates successful completion of the chat invocation.
 
 This is a terminal event.
+
+The server emits done only after:
+
+1. Assistant response generation has completed.
+2. Final source citations have been validated.
+3. The completed conversation turn has been successfully persisted.
+4. Successful invocation completion has been recorded.
+
+The persisted conversation turn and successful completion state
+must be consistent before done is emitted.
+
+A failed or cancelled invocation must not be recorded as a
+completed assistant response.
+
+After successful persistence, a transport failure may prevent
+delivery of done. Loss of the HTTP connection does not undo an
+already committed conversation turn.
 
 Payload:
 

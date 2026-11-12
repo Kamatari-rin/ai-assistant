@@ -77,17 +77,31 @@ paths:
         - Escalations
       summary: Create an order escalation
       operationId: createEscalation
+
       description: |
         Creates an escalation for an eligible order.
 
         The Order Service validates business rules independently.
 
         The Idempotency-Key identifies one logical escalation operation.
-        Repeating the same request with the same key returns the
-        previously persisted result without creating another escalation.
+        It is globally unique across escalation operations,
+        not only within a single order.
 
-        Reusing the same key with a different request payload results
-        in an IDEMPOTENCY_CONFLICT.
+        The logical request identity includes the target order
+        displayNumber, reason, and priority.
+
+        Repeating the same logical request with the same key returns
+        HTTP 200 with the previously persisted result, without
+        creating another escalation.
+
+        Reusing the same key for a different logical request returns
+        HTTP 409 with IDEMPOTENCY_CONFLICT.
+
+        A successful replay returns the persisted result even if
+        the current order state has changed since the original request.
+
+        Concurrent requests with the same key must not create
+        multiple escalation records.
 
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -140,8 +154,10 @@ components:
       in: header
       required: true
       description: |
-        Stable UUID identifying a logical escalation operation.
+        Globally unique UUID identifying a logical escalation operation.
         The AI Service uses the action proposal ID as this key.
+        The same key must be reused for recovery and retries
+        of the same logical operation.
       schema:
         type: string
         format: uuid
@@ -341,7 +357,8 @@ components:
     EscalationConflict:
       description: |
         The order is not eligible for escalation, or the
-        Idempotency-Key has already been used with a different payload.
+        Idempotency-Key has already been used with a different
+        logical request identity (displayNumber, reason, priority).
       content:
         application/problem+json:
           schema:
