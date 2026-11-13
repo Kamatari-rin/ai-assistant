@@ -1,0 +1,387 @@
+openapi: 3.1.0
+
+info:
+  title: Enterprise AI Assistant - Order Service API
+  version: 0.2.0
+  description: |
+    REST API for retrieving order information, order events,
+    and creating idempotent escalation requests.
+
+    The initial API supports synthetic demonstration data only.
+
+servers:
+  - url: http://localhost:8081
+    description: Local development and Docker Compose
+
+tags:
+  - name: Orders
+    description: Read-only order operations
+  - name: Escalations
+    description: Order escalation operations
+
+paths:
+  /api/v1/orders/{displayNumber}:
+    parameters:
+      - $ref: '#/components/parameters/DisplayNumber'
+
+    get:
+      tags:
+        - Orders
+      summary: Get an order
+      operationId: getOrder
+
+      responses:
+        '200':
+          description: Order found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderResponse'
+
+        '400':
+          $ref: '#/components/responses/ValidationError'
+
+        '404':
+          $ref: '#/components/responses/OrderNotFound'
+
+  /api/v1/orders/{displayNumber}/events:
+    parameters:
+      - $ref: '#/components/parameters/DisplayNumber'
+
+    get:
+      tags:
+        - Orders
+      summary: Get order events
+      operationId: getOrderEvents
+
+      responses:
+        '200':
+          description: Order events retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderEventsResponse'
+
+        '400':
+          $ref: '#/components/responses/ValidationError'
+
+        '404':
+          $ref: '#/components/responses/OrderNotFound'
+
+  /api/v1/orders/{displayNumber}/escalations:
+    parameters:
+      - $ref: '#/components/parameters/DisplayNumber'
+
+    post:
+      tags:
+        - Escalations
+      summary: Create an order escalation
+      operationId: createEscalation
+
+      description: |
+        Creates an escalation for an eligible order.
+
+        The Order Service validates business rules independently.
+
+        The Idempotency-Key identifies one logical escalation operation.
+        It is globally unique across escalation operations,
+        not only within a single order.
+
+        The logical request identity includes the target order
+        displayNumber, reason, and priority.
+
+        Repeating the same logical request with the same key returns
+        HTTP 200 with the previously persisted result, without
+        creating another escalation.
+
+        Reusing the same key for a different logical request returns
+        HTTP 409 with IDEMPOTENCY_CONFLICT.
+
+        A successful replay returns the persisted result even if
+        the current order state has changed since the original request.
+
+        Concurrent requests with the same key must not create
+        multiple escalation records.
+
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEscalationRequest'
+
+      responses:
+        '201':
+          description: Escalation created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EscalationResponse'
+
+        '200':
+          description: Previously created escalation returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EscalationResponse'
+
+        '400':
+          $ref: '#/components/responses/ValidationError'
+
+        '404':
+          $ref: '#/components/responses/OrderNotFound'
+
+        '409':
+          $ref: '#/components/responses/EscalationConflict'
+
+components:
+  parameters:
+    DisplayNumber:
+      name: displayNumber
+      in: path
+      required: true
+      description: Human-readable order identifier
+      schema:
+        type: string
+        minLength: 1
+      example: '12345'
+
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Globally unique UUID identifying a logical escalation operation.
+        The AI Service uses the action proposal ID as this key.
+        The same key must be reused for recovery and retries
+        of the same logical operation.
+      schema:
+        type: string
+        format: uuid
+      example: 'f90fd699-154c-4ddb-9b9a-316ea31b2b07'
+
+  schemas:
+    OrderStatus:
+      type: string
+      enum:
+        - DELAYED
+
+    DelayReason:
+      type: string
+      enum:
+        - OUT_OF_STOCK
+
+    EscalationReason:
+      type: string
+      enum:
+        - OUT_OF_STOCK
+
+    EscalationPriority:
+      type: string
+      enum:
+        - HIGH
+
+    EscalationStatus:
+      type: string
+      enum:
+        - CREATED
+
+    OrderResponse:
+      type: object
+      required:
+        - id
+        - displayNumber
+        - status
+        - delayReason
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        displayNumber:
+          type: string
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        delayReason:
+          $ref: '#/components/schemas/DelayReason'
+        updatedAt:
+          type: string
+          format: date-time
+          description: UTC timestamp
+
+      examples:
+        - id: '09b98c5b-37a5-4fa3-97c7-a016d7517760'
+          displayNumber: '12345'
+          status: DELAYED
+          delayReason: OUT_OF_STOCK
+          updatedAt: '2026-11-11T10:30:00Z'
+
+    OrderEvent:
+      type: object
+      required:
+        - type
+        - description
+        - createdAt
+      properties:
+        type:
+          type: string
+        description:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+          description: UTC timestamp
+
+      examples:
+        - type: STOCK_UNAVAILABLE
+          description: Required item is temporarily out of stock.
+          createdAt: '2026-11-11T10:30:00Z'
+
+    OrderEventsResponse:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderEvent'
+
+    CreateEscalationRequest:
+      type: object
+      required:
+        - reason
+        - priority
+      properties:
+        reason:
+          $ref: '#/components/schemas/EscalationReason'
+        priority:
+          $ref: '#/components/schemas/EscalationPriority'
+
+      examples:
+        - reason: OUT_OF_STOCK
+          priority: HIGH
+
+    EscalationResponse:
+      type: object
+      required:
+        - escalationId
+        - orderNumber
+        - status
+      properties:
+        escalationId:
+          type: string
+          format: uuid
+        orderNumber:
+          type: string
+        status:
+          $ref: '#/components/schemas/EscalationStatus'
+
+      examples:
+        - escalationId: '5a3bb692-d257-491c-9212-d49ea1518ed1'
+          orderNumber: '12345'
+          status: CREATED
+
+    ErrorCode:
+      type: string
+      enum:
+        - VALIDATION_ERROR
+        - ORDER_NOT_FOUND
+        - ORDER_NOT_ELIGIBLE
+        - IDEMPOTENCY_CONFLICT
+
+    ProblemDetail:
+      type: object
+      required:
+        - type
+        - title
+        - status
+        - detail
+        - instance
+        - code
+        - requestId
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+          description: Sanitized error description
+        instance:
+          type: string
+          format: uri-reference
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        requestId:
+          type: string
+          format: uuid
+
+  responses:
+    ValidationError:
+      description: Invalid request
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+          example:
+            type: 'about:blank'
+            title: Bad Request
+            status: 400
+            detail: Request validation failed.
+            instance: '/api/v1/orders/12345/escalations'
+            code: VALIDATION_ERROR
+            requestId: 'd3c4d8e1-99bd-448b-957f-53286f3fe203'
+
+    OrderNotFound:
+      description: Order does not exist
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+          example:
+            type: 'about:blank'
+            title: Not Found
+            status: 404
+            detail: Order was not found.
+            instance: '/api/v1/orders/99999'
+            code: ORDER_NOT_FOUND
+            requestId: 'd3c4d8e1-99bd-448b-957f-53286f3fe203'
+
+    EscalationConflict:
+      description: |
+        The order is not eligible for escalation, or the
+        Idempotency-Key has already been used with a different
+        logical request identity (displayNumber, reason, priority).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+          examples:
+            orderNotEligible:
+              summary: Order is not eligible for escalation
+              value:
+                type: 'about:blank'
+                title: Conflict
+                status: 409
+                detail: Order is not eligible for escalation.
+                instance: '/api/v1/orders/12345/escalations'
+                code: ORDER_NOT_ELIGIBLE
+                requestId: 'd3c4d8e1-99bd-448b-957f-53286f3fe203'
+
+            idempotencyConflict:
+              summary: Idempotency key reused with another payload
+              value:
+                type: 'about:blank'
+                title: Conflict
+                status: 409
+                detail: Idempotency key conflicts with an existing request.
+                instance: '/api/v1/orders/12345/escalations'
+                code: IDEMPOTENCY_CONFLICT
+                requestId: 'd3c4d8e1-99bd-448b-957f-53286f3fe203'

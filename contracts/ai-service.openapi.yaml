@@ -1,0 +1,934 @@
+openapi: 3.1.0
+
+info:
+  title: Enterprise AI Assistant - AI Service API
+  version: 0.2.0
+  description: |
+    REST and streaming API for conversational AI, document ingestion,
+    conversation history, and explicit action approval.
+
+    The API operates on synthetic demonstration data.
+
+servers:
+  - url: http://localhost:8080
+    description: Local development and Docker Compose
+
+tags:
+  - name: Chat
+    description: Streaming conversational AI
+  - name: Conversations
+    description: Conversation history
+  - name: Documents
+    description: Document ingestion and status
+  - name: Actions
+    description: Explicit action approval
+
+paths:
+  /api/v1/chat/stream:
+    post:
+      tags:
+        - Chat
+      summary: Stream an AI response
+      operationId: streamChat
+      description: |
+        Starts a new chat invocation or continues an existing conversation.
+
+        The response uses Server-Sent Events over a POST request.
+        Clients consume the response using a streaming HTTP client.
+
+        The event payloads, ordering, terminal events and cancellation
+        semantics are defined in chat-events.md.
+
+        The requestId is a correlation identifier, not an idempotency key.
+        Automatic retry or replay is not supported.
+
+        Errors occurring before the stream opens use HTTP Problem Details.
+        Errors occurring after the stream opens use a terminal SSE error event.
+
+      externalDocs:
+        description: Chat SSE protocol
+        url: ./chat-events.md
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+
+      responses:
+        '200':
+          description: AI response event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              examples:
+                started:
+                  summary: First event of a chat stream
+                  value: |
+                    id: 1
+                    event: started
+                    data: {"requestId":"f90fd699-154c-4ddb-9b9a-316ea31b2b07","conversationId":"09b98c5b-37a5-4fa3-97c7-a016d7517760","sequence":1}
+
+        '400':
+          $ref: '#/components/responses/ValidationError'
+
+        '404':
+          $ref: '#/components/responses/ConversationNotFound'
+
+        '409':
+          $ref: '#/components/responses/ConversationBusy'
+
+        '429':
+          $ref: '#/components/responses/AiRateLimited'
+
+        '502':
+          $ref: '#/components/responses/UpstreamFailure'
+
+        '503':
+          $ref: '#/components/responses/UpstreamUnavailable'
+
+        '504':
+          $ref: '#/components/responses/AiTimeout'
+
+  /api/v1/conversations/{conversationId}/messages:
+    parameters:
+      - $ref: '#/components/parameters/ConversationId'
+
+    get:
+      tags:
+        - Conversations
+      summary: Get conversation messages
+      operationId: getConversationMessages
+      description: |
+        Returns completed conversation messages in chronological order.
+
+        The response is bounded to the latest 100 messages.
+        Intermediate tool execution messages are not part of this history.
+
+      responses:
+        '200':
+          description: Conversation messages retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationMessagesResponse'
+
+        '400':
+          $ref: '#/components/responses/ValidationError'
+
+        '404':
+          $ref: '#/components/responses/ConversationNotFound'
+
+  /api/v1/documents:
+    post:
+      tags:
+        - Documents
+      summary: Upload a document
+      operationId: uploadDocument
+
+      description: |
+        Accepts a PDF document with extractable text for asynchronous
+        ingestion. PDF is the only supported document format in the MVP.
+
+        A new ingestion job returns HTTP 202 with PENDING status.
+
+        Identical content already in PENDING or PROCESSING status
+        returns HTTP 202 with the existing document ID and current
+        status, without creating another ingestion job.
+
+        Identical content already in READY status returns HTTP 200
+        with the existing document ID.
+
+        An identical FAILED document can restart ingestion using
+        the same document ID after cleanup.
+
+        The server deduplicates documents by content hash, not filename.
+        Different content with the same filename is a distinct document.
+
+        Concurrent uploads of identical content must not create
+        duplicate document records or active ingestion jobs.
+
+        The server validates file size, extension and actual PDF content.
+        OCR and TXT ingestion are not supported in the MVP.
+
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+            encoding:
+              file:
+                contentType: application/pdf
+
+      responses:
+        '202':
+          description: Document accepted or identical ingestion already active
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentAcceptedResponse'
+
+        '200':
+          description: Identical READY document already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentAlreadyExistsResponse'
+
+        '400':
+          $ref: '#/components/responses/InvalidDocument'
+
+        '413':
+          $ref: '#/components/responses/DocumentTooLarge'
+
+    get:
+      tags:
+        - Documents
+      summary: List documents
+      operationId: listDocuments
+
+      responses:
+        '200':
+          description: Documents retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentsResponse'
+
+  /api/v1/documents/{documentId}:
+    parameters:
+      - $ref: '#/components/parameters/DocumentId'
+
+    get:
+      tags:
+        - Documents
+      summary: Get document status
+      operationId: getDocument
+
+      responses:
+        '200':
+          description: Document found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentResponse'
+
+        '400':
+          $ref: '#/components/responses/ValidationError'
+
+        '404':
+          $ref: '#/components/responses/DocumentNotFound'
+
+  /api/v1/actions/{proposalId}:
+    parameters:
+      - $ref: '#/components/parameters/ProposalId'
+
+    get:
+      tags:
+        - Actions
+      summary: Get action proposal status
+      operationId: getActionProposal
+      description: |
+        Returns the persisted proposal state.
+
+        Clients can poll this endpoint when a confirmation request
+        returns HTTP 202 with EXECUTING status.
+
+        A CONFIRMED proposal includes the persisted action result.
+        Other proposal states do not include a result.
+
+        This operation does not execute or retry a business mutation.
+
+      responses:
+        '200':
+          description: Action proposal found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionProposalResponse'
+
+        '400':
+          $ref: '#/components/responses/ValidationError'
+
+        '404':
+          $ref: '#/components/responses/ProposalNotFound'
+
+  /api/v1/actions/{proposalId}/confirm:
+    parameters:
+      - $ref: '#/components/parameters/ProposalId'
+
+    post:
+      tags:
+        - Actions
+      summary: Confirm an action proposal
+      operationId: confirmActionProposal
+      description: |
+        Explicitly confirms a proposed action.
+
+        Before starting execution, the backend validates the proposal
+        state, expiry, action allowlist, synthetic-user context,
+        and successful completion of the originating chat invocation.
+
+        A non-expired PENDING proposal from an active, failed or
+        cancelled invocation returns HTTP 409 with
+        PROPOSAL_NOT_CONFIRMABLE.
+
+        This rejection does not change the proposal state and
+        does not initiate a downstream mutation.
+
+        Successful invocation completion is determined by persisted
+        server-side state, not by a client-supplied flag.
+
+        A valid PENDING proposal is atomically claimed by transitioning
+        it to EXECUTING.
+
+        The proposalId is the stable business idempotency key.
+        It is reused as the downstream Idempotency-Key.
+
+        Replaying a CONFIRMED proposal returns HTTP 200 with the
+        persisted result without executing another mutation,
+        regardless of the original proposal expiry.
+
+        A concurrent EXECUTING proposal returns HTTP 202.
+        Clients can poll the proposal status endpoint.
+
+        Successful execution transitions EXECUTING to CONFIRMED
+        and persists the action result.
+
+        A definitive downstream business rejection transitions
+        EXECUTING to REJECTED only when the absence of a committed
+        mutation is established for the logical operation.
+
+        The corresponding business error is returned to the client.
+
+        An uncertain downstream outcome remains EXECUTING.
+        Recovery uses the same logical downstream request and
+        the same idempotency key.
+
+        A timeout, communication failure or lost response must not
+        by itself cause a transition to REJECTED.
+
+        An idempotency conflict does not by itself establish
+        that no mutation has occurred.
+
+        An EXECUTING proposal must not be automatically expired
+        or returned to PENDING because of an uncertain outcome.
+
+        A REJECTED proposal returns HTTP 409 with
+        PROPOSAL_ALREADY_PROCESSED.
+
+        An EXPIRED proposal returns HTTP 410 with PROPOSAL_EXPIRED.
+
+        No database transaction is held open across downstream HTTP.
+
+        Action execution is performed by the backend, not by the LLM.
+
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfirmActionRequest'
+
+      responses:
+        '200':
+          description: Action confirmed or persisted result returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionConfirmedResponse'
+
+        '202':
+          description: Action execution is in progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionExecutingResponse'
+
+        '400':
+          $ref: '#/components/responses/ValidationError'
+
+        '404':
+          $ref: '#/components/responses/ConfirmNotFound'
+
+        '409':
+          $ref: '#/components/responses/ConfirmConflict'
+
+        '410':
+          $ref: '#/components/responses/ProposalExpired'
+
+        '502':
+          $ref: '#/components/responses/OrderServiceFailure'
+
+        '503':
+          $ref: '#/components/responses/OrderServiceUnavailable'
+
+  /api/v1/actions/{proposalId}/reject:
+    parameters:
+      - $ref: '#/components/parameters/ProposalId'
+
+    post:
+      tags:
+        - Actions
+      summary: Reject an action proposal
+      operationId: rejectActionProposal
+      description: |
+        Rejects a non-expired PENDING action proposal.
+
+        Rejecting an EXECUTING, CONFIRMED or REJECTED proposal
+        returns HTTP 409 with PROPOSAL_ALREADY_PROCESSED.
+
+        Rejecting an EXPIRED proposal returns HTTP 410
+        with PROPOSAL_EXPIRED.
+
+        An EXECUTING proposal cannot be cancelled through this endpoint.
+
+        No downstream business mutation is performed.
+
+      responses:
+        '200':
+          description: Action rejected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionRejectedResponse'
+
+        '400':
+          $ref: '#/components/responses/ValidationError'
+
+        '404':
+          $ref: '#/components/responses/ProposalNotFound'
+
+        '409':
+          $ref: '#/components/responses/RejectConflict'
+
+        '410':
+          $ref: '#/components/responses/ProposalExpired'
+
+components:
+  parameters:
+    ConversationId:
+      name: conversationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    DocumentId:
+      name: documentId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    ProposalId:
+      name: proposalId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    ChatRequest:
+      type: object
+      required:
+        - conversationId
+        - message
+      properties:
+        conversationId:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: |
+            Null starts a new conversation.
+            A non-null value must identify an existing conversation.
+        message:
+          type: string
+          minLength: 1
+          description: User message
+        requestId:
+          type: string
+          format: uuid
+          description: |
+            Optional correlation identifier.
+            Generated by the server when omitted.
+            Unique per invocation attempt.
+
+      examples:
+        - conversationId: null
+          message: 'Почему заказ 12345 задерживается?'
+          requestId: 'f90fd699-154c-4ddb-9b9a-316ea31b2b07'
+
+    MessageRole:
+      type: string
+      enum:
+        - USER
+        - ASSISTANT
+
+    ConversationMessage:
+      type: object
+      required:
+        - role
+        - content
+        - createdAt
+      properties:
+        role:
+          $ref: '#/components/schemas/MessageRole'
+        content:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+          description: UTC timestamp
+
+    ConversationMessagesResponse:
+      type: object
+      required:
+        - conversationId
+        - messages
+      properties:
+        conversationId:
+          type: string
+          format: uuid
+        messages:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/ConversationMessage'
+
+    DocumentStatus:
+      type: string
+      enum:
+        - PENDING
+        - PROCESSING
+        - READY
+        - FAILED
+
+    DocumentAcceptedResponse:
+      type: object
+      required:
+        - documentId
+        - status
+      properties:
+        documentId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+            - PENDING
+            - PROCESSING
+
+      examples:
+        - documentId: '9e807f42-8af3-4a03-b0d4-e6fac010d525'
+          status: PENDING
+        - documentId: '9e807f42-8af3-4a03-b0d4-e6fac010d525'
+          status: PROCESSING
+
+
+    DocumentAlreadyExistsResponse:
+      type: object
+      required:
+        - documentId
+        - status
+      properties:
+        documentId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          const: READY
+
+    DocumentResponse:
+      type: object
+      required:
+        - documentId
+        - filename
+        - status
+        - chunkCount
+        - uploadedAt
+      properties:
+        documentId:
+          type: string
+          format: uuid
+        filename:
+          type: string
+        status:
+          $ref: '#/components/schemas/DocumentStatus'
+        chunkCount:
+          type: integer
+          minimum: 0
+          description: Number of document chunks
+        uploadedAt:
+          type: string
+          format: date-time
+          description: UTC timestamp
+
+      examples:
+        - documentId: '9e807f42-8af3-4a03-b0d4-e6fac010d525'
+          filename: shipping-policy.pdf
+          status: READY
+          chunkCount: 9
+          uploadedAt: '2026-11-11T10:30:00Z'
+
+    DocumentsResponse:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentResponse'
+
+    ActionType:
+      type: string
+      enum:
+        - CREATE_ESCALATION
+
+    ActionStatus:
+      type: string
+      description: |
+        PENDING: awaiting explicit user approval.
+        EXECUTING: claimed for execution or awaiting safe recovery.
+        CONFIRMED: mutation succeeded and its result is persisted.
+        REJECTED: explicitly rejected before execution, or definitively
+        rejected during execution with no committed mutation.
+        EXPIRED: expired before execution started.
+      enum:
+        - PENDING
+        - EXECUTING
+        - CONFIRMED
+        - REJECTED
+        - EXPIRED
+
+    ActionProposalResponse:
+      type: object
+      required:
+        - proposalId
+        - status
+        - type
+        - expiresAt
+      properties:
+        proposalId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/ActionStatus'
+        type:
+          $ref: '#/components/schemas/ActionType'
+        expiresAt:
+          type: string
+          format: date-time
+          description: UTC timestamp
+        result:
+          $ref: '#/components/schemas/EscalationResult'
+
+      allOf:
+        - if:
+            properties:
+              status:
+                const: CONFIRMED
+            required:
+              - status
+          then:
+            required:
+              - result
+          else:
+            not:
+              required:
+                - result
+
+      examples:
+        - proposalId: '127319be-d806-4a7a-b88b-8861f34e2e04'
+          status: EXECUTING
+          type: CREATE_ESCALATION
+          expiresAt: '2026-11-11T19:00:00Z'
+
+        - proposalId: '127319be-d806-4a7a-b88b-8861f34e2e04'
+          status: CONFIRMED
+          type: CREATE_ESCALATION
+          expiresAt: '2026-11-11T19:00:00Z'
+          result:
+            escalationId: '5a3bb692-d257-491c-9212-d49ea1518ed1'
+            orderNumber: '12345'
+
+    ConfirmActionRequest:
+      type: object
+      properties:
+        requestId:
+          type: string
+          format: uuid
+          description: Optional correlation identifier
+
+    EscalationResult:
+      type: object
+      required:
+        - escalationId
+        - orderNumber
+      properties:
+        escalationId:
+          type: string
+          format: uuid
+        orderNumber:
+          type: string
+
+    ActionConfirmedResponse:
+      type: object
+      required:
+        - proposalId
+        - status
+        - result
+      properties:
+        proposalId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          const: CONFIRMED
+        result:
+          $ref: '#/components/schemas/EscalationResult'
+
+    ActionExecutingResponse:
+      type: object
+      required:
+        - proposalId
+        - status
+      properties:
+        proposalId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          const: EXECUTING
+
+    ActionRejectedResponse:
+      type: object
+      required:
+        - proposalId
+        - status
+      properties:
+        proposalId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          const: REJECTED
+
+    ErrorCode:
+      type: string
+      enum:
+        - VALIDATION_ERROR
+        - INVALID_DOCUMENT
+        - ORDER_NOT_FOUND
+        - DOCUMENT_NOT_FOUND
+        - PROPOSAL_NOT_FOUND
+        - CONVERSATION_NOT_FOUND
+        - ORDER_NOT_ELIGIBLE
+        - PROPOSAL_ALREADY_PROCESSED
+        - PROPOSAL_NOT_CONFIRMABLE
+        - CONVERSATION_BUSY
+        - IDEMPOTENCY_CONFLICT
+        - PROPOSAL_EXPIRED
+        - DOCUMENT_TOO_LARGE
+        - AI_RATE_LIMITED
+        - LLM_UNAVAILABLE
+        - ORDER_SERVICE_UNAVAILABLE
+        - TOOL_UNAVAILABLE
+        - AI_TIMEOUT
+
+    ProblemDetail:
+      type: object
+      required:
+        - type
+        - title
+        - status
+        - detail
+        - instance
+        - code
+        - requestId
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+          description: Sanitized error description
+        instance:
+          type: string
+          format: uri-reference
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        requestId:
+          type: string
+          format: uuid
+
+  responses:
+    ValidationError:
+      description: Invalid request (VALIDATION_ERROR)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    InvalidDocument:
+      description: |
+        Invalid upload request or invalid PDF
+        (VALIDATION_ERROR or INVALID_DOCUMENT).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    ConversationNotFound:
+      description: Conversation does not exist (CONVERSATION_NOT_FOUND)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    ConversationBusy:
+      description: Conversation already has an active invocation (CONVERSATION_BUSY)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    DocumentNotFound:
+      description: Document does not exist (DOCUMENT_NOT_FOUND)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    DocumentTooLarge:
+      description: Document exceeds the configured limit (DOCUMENT_TOO_LARGE)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    ProposalNotFound:
+      description: Proposal does not exist (PROPOSAL_NOT_FOUND)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    ConfirmNotFound:
+      description: |
+        Action proposal or target order does not exist
+        (PROPOSAL_NOT_FOUND or ORDER_NOT_FOUND).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    ConfirmConflict:
+      description: |
+        Action confirmation cannot proceed because the originating
+        invocation has not completed successfully, the proposal
+        is already processed, the target order is not eligible,
+        or the downstream idempotency key conflicts with another
+        logical request.
+
+        Error codes:
+        PROPOSAL_NOT_CONFIRMABLE,
+        PROPOSAL_ALREADY_PROCESSED,
+        ORDER_NOT_ELIGIBLE,
+        IDEMPOTENCY_CONFLICT.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    RejectConflict:
+      description: |
+        The proposal is no longer in a rejectable state
+        (PROPOSAL_ALREADY_PROCESSED).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    ProposalExpired:
+      description: Proposal has expired (PROPOSAL_EXPIRED)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    AiRateLimited:
+      description: AI request rate limit exceeded (AI_RATE_LIMITED)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    UpstreamFailure:
+      description: |
+        Upstream communication or response failure
+        (LLM_UNAVAILABLE, ORDER_SERVICE_UNAVAILABLE,
+        or TOOL_UNAVAILABLE).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    UpstreamUnavailable:
+      description: |
+        Required upstream dependency is temporarily unavailable
+        (LLM_UNAVAILABLE, ORDER_SERVICE_UNAVAILABLE,
+        or TOOL_UNAVAILABLE).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    OrderServiceFailure:
+      description: |
+        Order Service communication or response failure
+        (ORDER_SERVICE_UNAVAILABLE).
+
+        If mutation execution may have occurred, the proposal
+        remains EXECUTING and recovery uses the same idempotency key.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    OrderServiceUnavailable:
+      description: |
+        Order Service is temporarily unavailable
+        (ORDER_SERVICE_UNAVAILABLE).
+
+        An uncertain mutation outcome must not be treated as
+        a confirmed failure.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    AiTimeout:
+      description: AI invocation timed out (AI_TIMEOUT)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'

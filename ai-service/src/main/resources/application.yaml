@@ -1,0 +1,64 @@
+spring:
+  application:
+    name: ai-service
+
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:127.0.0.1}:${DB_PORT:5432}/${POSTGRES_DB:ai_assistant}
+    username: ${AI_DB_USER:ai_app}
+    password: ${AI_DB_PASSWORD}
+    hikari:
+      pool-name: ai-service-pool
+      maximum-pool-size: 5
+      minimum-idle: 1
+      connection-timeout: 5000
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    default-schema: ai
+    schemas:
+      - ai
+    table: flyway_schema_history
+    create-schemas: false
+    baseline-on-migrate: false
+    validate-on-migrate: true
+    clean-disabled: true
+
+server:
+  address: 127.0.0.1
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+      discovery:
+        enabled: false
+
+  endpoint:
+    health:
+      show-details: never
+
+  tracing:
+    sampling:
+      probability: 1.0
+
+    propagation:
+      type: w3c
+
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTLP_TRACES_ENDPOINT:http://127.0.0.1:4318/v1/traces}
+
+  otlp:
+    metrics:
+      export:
+        enabled: false
+
+  logging:
+    export:
+      otlp:
+        enabled: false
