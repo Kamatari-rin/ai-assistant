@@ -1,7 +1,7 @@
 
 # Chat Server-Sent Events Protocol
 
-Contract version: 0.2.0
+Contract version: 0.3.0
 
 Status: Frozen for MVP
 
@@ -48,6 +48,12 @@ Example:
 - The server generates requestId when it is omitted.
 - Each invocation attempt has its own requestId.
 - requestId is not a business idempotency key.
+- message must contain at least one non-whitespace character.
+- message must not exceed 4000 Unicode code points.
+- Blank or oversized messages return HTTP 400 with VALIDATION_ERROR.
+- requestId is globally unique across invocation attempts.
+- Reusing a requestId returns HTTP 400 with VALIDATION_ERROR,
+  including concurrent attempts.
 
 The client consumes the POST response using a streaming HTTP client,
 such as fetch with ReadableStream.
@@ -489,11 +495,16 @@ Controlled invocation errors include:
 | TOOL_UNAVAILABLE | Required tool unavailable |
 | AI_TIMEOUT | Invocation timeout |
 | TOOL_LIMIT_EXCEEDED | Tool execution limit exceeded |
+| INTERNAL_ERROR | Unexpected internal AI Service failure |
 
 TOOL_LIMIT_EXCEEDED is a controlled terminal SSE error.
 
 Clients must handle an unknown error code as a generic failed
 invocation and may display the sanitized message.
+
+Unexpected internal failures after the stream opens use
+INTERNAL_ERROR as a controlled terminal SSE error when the
+connection remains writable.
 
 ## 7. HTTP errors and SSE errors
 
@@ -501,6 +512,12 @@ Before the SSE stream opens, request failures use the appropriate
 HTTP status and application/problem+json response.
 
 The REST error schema is defined in ai-service.openapi.yaml.
+
+Exhaustion of local chat admission capacity before the stream
+opens returns HTTP 429 with AI_RATE_LIMITED.
+
+Unexpected internal failures before the stream opens return
+HTTP 500 with INTERNAL_ERROR.
 
 After the stream opens, an HTTP 200 response does not guarantee that
 the invocation will complete successfully.
@@ -632,6 +649,26 @@ event: error
 data: {"sequence":3,"code":"ORDER_SERVICE_UNAVAILABLE","message":"Order information is temporarily unavailable.","requestId":"9b41f757-6915-48ba-adc9-82c36bb39c85"}
 
 ```
+
+### Internal failure after partial output
+
+```text
+id: 1
+event: started
+data: {"sequence":1,"requestId":"f90fd699-154c-4ddb-9b9a-316ea31b2b07","conversationId":"09b98c5b-37a5-4fa3-97c7-a016d7517760"}
+
+id: 2
+event: delta
+data: {"sequence":2,"text":"Partial assistant response."}
+
+id: 3
+event: error
+data: {"sequence":3,"code":"INTERNAL_ERROR","message":"An internal error occurred.","requestId":"f90fd699-154c-4ddb-9b9a-316ea31b2b07"}
+
+```
+
+The partial response is not a completed conversation turn.
+The server closes the stream after the terminal error event.
 
 The server closes the stream after the error event.
 
