@@ -13,8 +13,12 @@ The authoritative specifications are:
 - [Chat SSE protocol](../contracts/chat-events.md)
 
 The Foundation implements health endpoints and infrastructure.
-The business APIs described here are contracts for subsequent
-implementation stages.
+
+Order Service implements its three REST endpoints defined
+in the frozen Order Service OpenAPI contract.
+
+AI Service business endpoints and the chat SSE protocol
+remain specifications for subsequent implementation stages.
 
 ## General conventions
 
@@ -208,11 +212,56 @@ Example order response:
 }
 ```
 
+
+### Order lookup and events
+
+The Order Service treats display numbers as exact strings.
+
+An existing order returns HTTP 200.
+An unknown order returns HTTP 404 with `ORDER_NOT_FOUND`.
+
+Order events are sorted by creation time ascending, with
+event ID ascending as the deterministic tie-breaker.
+
+An existing order without events returns HTTP 200 with
+an empty `items` array.
+
+### Escalation request
+
+Escalation creation requires an `Idempotency-Key` UUID header
+and an application/json request body.
+
+```json
+{
+  "reason": "OUT_OF_STOCK",
+  "priority": "HIGH"
+}
+```
+
+Example successful response:
+
+```json
+{
+  "escalationId": "5a3bb692-d257-491c-9212-d49ea1518ed1",
+  "orderNumber": "12345",
+  "status": "CREATED"
+}
+```
+
+The current demo eligibility rule requires:
+
+- Order status: DELAYED.
+- Order delay reason: OUT_OF_STOCK.
+- Escalation reason: OUT_OF_STOCK.
+- Escalation priority: HIGH.
+
+The current demo enums contain only these initial values.
+A complete order lifecycle is outside the current implementation.
+
 ### Escalation idempotency
 
-Escalation creation requires an `Idempotency-Key` UUID header.
-
-AI Service uses the proposal ID as the downstream key.
+The planned AI Service approval implementation will use the
+proposal ID as the downstream idempotency key.
 
 Logical request identity includes:
 
@@ -238,6 +287,48 @@ Concurrent requests must not create duplicate escalation records.
 Successful replay returns the persisted result even if
 the order state has subsequently changed.
 
+Request syntax is validated before idempotency resolution.
+
+An existing key is resolved before current order eligibility
+is evaluated. An already persisted conflicting identity takes
+precedence over a missing target order.
+
+Different idempotency keys represent independent operations,
+including operations targeting the same order.
+
+Escalation creation does not modify order state or event history.
+
+### Order Service error responses
+
+| HTTP status | Error code |
+|---|---|
+| 400 | VALIDATION_ERROR |
+| 404 | ORDER_NOT_FOUND |
+| 409 | ORDER_NOT_ELIGIBLE |
+| 409 | IDEMPOTENCY_CONFLICT |
+
+Contract-defined errors use application/problem+json.
+
+The Order Service generates its own requestId UUID for error
+responses.
+
+Example:
+
+```json
+{
+  "type": "about:blank",
+  "title": "Conflict",
+  "status": 409,
+  "detail": "Idempotency key conflicts with an existing request.",
+  "instance": "/api/v1/orders/12346/escalations",
+  "code": "IDEMPOTENCY_CONFLICT",
+  "requestId": "d3c4d8e1-99bd-448b-957f-53286f3fe203"
+}
+```
+
+The frozen OpenAPI specification defines the authoritative
+endpoint-specific schemas and response codes.
+
 ## Error handling
 
 HTTP application errors use:
@@ -255,6 +346,12 @@ Problem Details include:
 - instance
 - code
 - requestId
+
+These fields apply to the contract-defined application errors.
+
+Unexpected technical failures must use sanitized error responses.
+Framework-level errors and HTTP 500 responses are not additional
+business error codes in the frozen Order Service contract.
 
 Error messages must not expose credentials, stack traces,
 private prompts or raw internal exceptions.
