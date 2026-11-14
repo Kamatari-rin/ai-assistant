@@ -3,6 +3,7 @@ package com.example.aiassistant.orders.api;
 import com.example.aiassistant.orders.api.error.OrderRequestValidationException;
 import com.example.aiassistant.orders.application.OrderQueryService;
 import com.example.aiassistant.orders.application.port.OrderRepository;
+import com.example.aiassistant.orders.application.port.EscalationRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -41,6 +42,9 @@ class OrderControllerErrorTest {
 
     @MockitoBean(enforceOverride = true)
     private OrderRepository orderRepository;
+
+    @MockitoBean(enforceOverride = true)
+    private EscalationRepository escalationRepository;
 
     @Autowired
     private MockMvc mockMvc;

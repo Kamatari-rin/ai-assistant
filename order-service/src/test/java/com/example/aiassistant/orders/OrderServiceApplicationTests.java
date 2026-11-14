@@ -1,6 +1,7 @@
 package com.example.aiassistant.orders;
 
 import com.example.aiassistant.orders.application.port.OrderRepository;
+import com.example.aiassistant.orders.application.port.EscalationRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -20,6 +21,9 @@ class OrderServiceApplicationTests {
 
     @MockitoBean(enforceOverride = true)
     private OrderRepository orderRepository;
+
+    @MockitoBean(enforceOverride = true)
+    private EscalationRepository escalationRepository;
 
     @Autowired
     private MockMvc mockMvc;

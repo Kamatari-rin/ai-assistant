@@ -1,6 +1,7 @@
 package com.example.aiassistant.orders.api;
 
 import com.example.aiassistant.orders.application.port.OrderRepository;
+import com.example.aiassistant.orders.application.port.EscalationRepository;
 import com.example.aiassistant.orders.domain.DelayReason;
 import com.example.aiassistant.orders.domain.Order;
 import com.example.aiassistant.orders.domain.OrderEvent;
@@ -64,6 +65,9 @@ class OrderControllerTest {
 
     @MockitoBean(enforceOverride = true)
     private OrderRepository orderRepository;
+
+    @MockitoBean(enforceOverride = true)
+    private EscalationRepository escalationRepository;
 
     @Autowired
     private MockMvc mockMvc;

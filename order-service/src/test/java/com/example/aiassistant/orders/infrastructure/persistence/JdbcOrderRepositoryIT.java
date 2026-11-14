@@ -20,8 +20,12 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.sql.Statement;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class JdbcOrderRepositoryIT {
 
@@ -295,6 +299,146 @@ class JdbcOrderRepositoryIT {
 
         assertThat(repository.findByDisplayNumber(" 12345 "))
                 .isEmpty();
+    }
+
+    @Test
+    void findsOrderForUpdateAndPreservesExactDisplayNumber() {
+
+        transactionTemplate.executeWithoutResult(status -> {
+
+            status.setRollbackOnly();
+
+            Order expected = repository
+                    .findByDisplayNumber("12345")
+                    .orElseThrow();
+
+            assertThat(
+                    repository.findByDisplayNumberForUpdate("12345")
+            ).contains(expected);
+
+            assertThat(
+                    repository.findByDisplayNumberForUpdate("99999")
+            ).isEmpty();
+
+            assertThat(
+                    repository.findByDisplayNumberForUpdate("0012345")
+            ).isEmpty();
+
+            assertThat(
+                    repository.findByDisplayNumberForUpdate(" 12345 ")
+            ).isEmpty();
+        });
+    }
+
+    @Test
+    void holdsRowLockUntilTransactionCompletes() {
+
+        transactionTemplate.executeWithoutResult(status -> {
+
+            status.setRollbackOnly();
+
+            assertThat(
+                    repository.findByDisplayNumberForUpdate("12345")
+            ).isPresent();
+
+            try (
+                    Connection competingConnection =
+                            OrderPostgresTestSupport.openOrderConnection(
+                                    postgres
+                            );
+
+                    Statement statement =
+                            competingConnection.createStatement()
+            ) {
+
+                competingConnection.setAutoCommit(true);
+
+                statement.execute(
+                        "SET statement_timeout = '5s'"
+                );
+
+                // Another order is not blocked.
+                try (var resultSet = statement.executeQuery("""
+                    SELECT id
+                    FROM orders.orders
+                    WHERE display_number = '12346'
+                    FOR UPDATE NOWAIT
+                    """)) {
+
+                    assertThat(resultSet.next()).isTrue();
+                }
+
+                // A normal read of the locked order is still allowed.
+                try (var resultSet = statement.executeQuery("""
+                    SELECT id
+                    FROM orders.orders
+                    WHERE display_number = '12345'
+                    """)) {
+
+                    assertThat(resultSet.next()).isTrue();
+                }
+
+                // A competing row lock must fail immediately.
+                assertThatThrownBy(() ->
+                        acquireMainOrderLock(statement)
+                )
+                        .isInstanceOfSatisfying(
+                                SQLException.class,
+                                exception ->
+                                        assertThat(
+                                                exception.getSQLState()
+                                        ).isEqualTo("55P03")
+                        );
+
+            } catch (SQLException exception) {
+                throw new AssertionError(
+                        "Competing connection verification failed.",
+                        exception
+                );
+            }
+        });
+
+        // The original transaction has rolled back.
+        // Its row lock must now be released.
+        try (
+                Connection connection =
+                        OrderPostgresTestSupport.openOrderConnection(
+                                postgres
+                        );
+
+                Statement statement =
+                        connection.createStatement()
+        ) {
+
+            connection.setAutoCommit(true);
+
+            statement.execute(
+                    "SET statement_timeout = '5s'"
+            );
+
+            acquireMainOrderLock(statement);
+
+        } catch (SQLException exception) {
+            throw new AssertionError(
+                    "Row lock was not released.",
+                    exception
+            );
+        }
+    }
+
+    private static void acquireMainOrderLock(
+            Statement statement
+    ) throws SQLException {
+
+        try (var resultSet = statement.executeQuery("""
+            SELECT id
+            FROM orders.orders
+            WHERE display_number = '12345'
+            FOR UPDATE NOWAIT
+            """)) {
+
+            assertThat(resultSet.next()).isTrue();
+        }
     }
 
     private static void insertEvent(

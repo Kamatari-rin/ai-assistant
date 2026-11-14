@@ -32,6 +32,9 @@ public class JdbcOrderRepository implements OrderRepository {
             WHERE display_number = :displayNumber
             """;
 
+    private static final String FIND_ORDER_BY_DISPLAY_NUMBER_FOR_UPDATE =
+            FIND_ORDER_BY_DISPLAY_NUMBER + "FOR UPDATE\n";
+
     private static final String FIND_EVENTS_BY_ORDER_ID = """
             SELECT
                 id,
@@ -79,6 +82,18 @@ public class JdbcOrderRepository implements OrderRepository {
     ) {
 
         return jdbcClient.sql(FIND_ORDER_BY_DISPLAY_NUMBER)
+                .param("displayNumber", displayNumber)
+                .query(ORDER_ROW_MAPPER)
+                .optional();
+    }
+
+    @Override
+    public Optional<Order> findByDisplayNumberForUpdate(
+            String displayNumber
+    ) {
+
+        return jdbcClient
+                .sql(FIND_ORDER_BY_DISPLAY_NUMBER_FOR_UPDATE)
                 .param("displayNumber", displayNumber)
                 .query(ORDER_ROW_MAPPER)
                 .optional();
