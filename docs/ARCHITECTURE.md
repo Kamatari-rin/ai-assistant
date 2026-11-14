@@ -10,12 +10,15 @@ and explicit approval of business actions.
 The architecture separates AI orchestration from business
 data ownership and business mutation execution.
 
-The Foundation currently implements application startup,
-database infrastructure, migrations, health endpoints
-and HTTP tracing.
+The Foundation implements application startup, database
+infrastructure, migrations, health endpoints and HTTP tracing.
 
-Business capabilities described below represent the target
-MVP architecture unless explicitly marked as implemented.
+Order Service implements order lookup, event retrieval and
+transactional escalation creation with persistent idempotency.
+
+AI orchestration, tool calling, document retrieval, conversation
+history and action approval remain planned MVP capabilities
+unless explicitly marked as implemented.
 
 ## System context
 
@@ -64,25 +67,28 @@ orders database schema directly.
 
 ### Order Service
 
-Implemented Foundation:
+Implemented responsibilities:
 
 - Independent Spring Boot application.
-- Spring MVC infrastructure.
-- JDBC datasource.
+- Spring MVC REST API.
+- JDBC datasource and JdbcClient repositories.
 - Order-owned Flyway migrations.
+- Deterministic synthetic orders and event history.
+- Order lookup.
+- Chronological order event retrieval.
+- Transactional escalation creation.
+- Independent business rule validation.
+- Globally scoped, persistent idempotency.
+- Concurrent mutation protection.
 - Health endpoint.
 - OpenTelemetry trace exporter.
 
-Planned responsibilities:
-
-- Order lookup.
-- Order event retrieval.
-- Escalation creation.
-- Business rule validation.
-- Idempotent mutation execution.
-
 Order Service is authoritative for order data and escalation
 business rules.
+
+The API, application, domain and persistence layers have separate
+responsibilities. HTTP DTOs are mapped explicitly to and from
+the internal domain model.
 
 ### Web UI
 
@@ -125,8 +131,11 @@ Responsibilities:
   LLM integration and framework adapters.
 - Configuration: dependency wiring and application settings.
 
-These packages will be introduced as required by implementation.
-The Foundation does not contain empty placeholder layers.
+Order Service implements this package structure.
+AI Service will introduce the corresponding layers as its
+business capabilities are implemented.
+
+Empty placeholder layers are not required.
 
 Java domain entities are not shared between backend services.
 Public integration uses explicit HTTP DTO contracts.
@@ -156,15 +165,43 @@ Each service maintains its own Flyway history table and migrations.
 
 Direct cross-schema application access is prohibited.
 
-### Planned data model
 
-Order schema:
+### Implemented order data model
 
-- Orders.
-- Order events.
-- Escalations.
+The `orders` schema contains:
 
-AI schema:
+- `orders`: order identity, display number, status, delay reason
+  and timestamps.
+- `order_events`: event identity, owning order, event type,
+  description and creation timestamp.
+- `escalations`: escalation identity, owning order, persisted
+  display number, reason, priority, idempotency key and
+  creation timestamp.
+
+```mermaid
+erDiagram
+    ORDERS ||--o{ ORDER_EVENTS : contains
+    ORDERS ||--o{ ESCALATIONS : receives
+```
+
+Identifiers are UUIDs. Human-readable display numbers are
+unique, non-empty strings.
+
+Event and escalation records reference their owning order
+through foreign keys.
+
+Escalation idempotency keys are globally unique across all
+escalation records.
+
+The escalation record retains the display number as part of
+the persisted logical request identity and response.
+
+Database timestamps use TIMESTAMPTZ. The Java domain uses
+Instant, with explicit JDBC timestamp conversion.
+
+### Planned AI data model
+
+The `ai` schema will contain:
 
 - Conversations and completed messages.
 - Document metadata and ingestion state.
@@ -175,10 +212,67 @@ AI schema:
 The precise relational model is introduced through
 service-owned Flyway migrations.
 
-The Foundation does not create these business tables.
-
 The Spring AI vector-store schema must follow the verified
 Spring AI version rather than a guessed database definition.
+
+## Implemented escalation transaction
+
+Escalation creation is coordinated by the Order Service
+application layer in a PostgreSQL READ COMMITTED transaction.
+
+```mermaid
+flowchart TD
+    Request["Validated escalation command"] --> Lookup["Find persisted idempotency key"]
+    Lookup --> Found{"Key exists?"}
+    Found -->|Yes| Resolve["Compare persisted logical identity"]
+    Found -->|No| Lock["Lock target order"]
+    Lock --> Recheck["Recheck idempotency key"]
+    Recheck --> Exists{"Key exists?"}
+    Exists -->|Yes| Resolve
+    Exists -->|No| Validate["Validate order existence and eligibility"]
+    Validate --> Insert["Atomic INSERT ON CONFLICT DO NOTHING RETURNING"]
+    Insert --> Created{"Inserted?"}
+    Created -->|Yes| Commit["Commit and return created result"]
+    Created -->|No| Winner["Read persisted winner"]
+    Winner --> Resolve
+    Resolve --> Match{"Identity matches?"}
+    Match -->|Yes| Replay["Return persisted result"]
+    Match -->|No| Conflict["Idempotency conflict"]
+```
+
+The database enforces the global uniqueness of idempotency keys.
+
+The application acquires an order row lock before validating
+the current order state and attempting a new mutation.
+
+After acquiring the lock, the application checks the key again.
+
+An atomic INSERT with an explicit idempotency-key conflict target
+prevents duplicate records without converting expected key
+collisions into failed PostgreSQL transactions.
+
+When an INSERT loses a concurrent key conflict, the application
+reads the persisted winner in a separate SQL statement.
+
+A successful replay does not repeat eligibility validation
+or create a new escalation record.
+
+Different keys represent independent logical operations, even
+when they target the same order.
+
+The current demo eligibility rule requires a delayed order,
+an OUT_OF_STOCK delay reason, an OUT_OF_STOCK escalation
+reason and HIGH priority.
+
+Creating an escalation does not modify the order or its event
+history.
+
+Transaction failures propagate to the caller and do not produce
+a successful creation response.
+
+The planned AI approval mechanism is a separate upstream
+responsibility. Order Service does not currently implement
+end-user authentication or approval verification.
 
 ## Planned chat flow
 
@@ -313,6 +407,12 @@ Implemented tracing:
 - W3C trace context propagation configuration.
 - Inbound HTTP server spans.
 - Direct OTLP HTTP export to Jaeger.
+
+Inbound HTTP tracing has been verified for Order Service
+order lookup, event retrieval and escalation creation.
+
+W3C context extraction preserves the incoming trace ID and
+parent span reference.
 
 Planned tracing coverage:
 
