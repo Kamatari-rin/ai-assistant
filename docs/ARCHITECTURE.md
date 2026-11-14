@@ -26,7 +26,7 @@ unless explicitly marked as implemented.
 flowchart LR
     UI["React Web UI (planned)"] --> AI["AI Service"]
     AI --> OS["Order Service"]
-    AI --> OpenAI["OpenAI Chat / Embeddings (planned)"]
+    AI --> LLM["Configurable model providers (planned)"]
     AI --> AIDB["AI schema"]
     OS --> ODB["Orders schema"]
     AI --> Jaeger["Jaeger"]
@@ -45,16 +45,21 @@ flowchart LR
 Implemented Foundation:
 
 - Spring Boot application.
-- Spring MVC infrastructure.
+- Spring WebFlux and Reactor Netty infrastructure.
 - JDBC datasource.
 - AI-owned Flyway migrations.
 - Health endpoint.
 - OpenTelemetry trace exporter.
 
+AI Service uses a reactive HTTP runtime. JDBC and Flyway
+remain synchronous technologies. Future application-level
+blocking database operations must execute outside Reactor
+Netty event loops on dedicated bounded execution resources.
+
 Planned responsibilities:
 
 - Chat orchestration.
-- LLM integration through Spring AI.
+- Provider-independent LLM integration through Spring AI.
 - Tool registration and execution limits.
 - Conversation persistence.
 - Document ingestion and retrieval.
@@ -413,6 +418,10 @@ order lookup, event retrieval and escalation creation.
 
 W3C context extraction preserves the incoming trace ID and
 parent span reference.
+
+Inbound HTTP tracing has also been verified for AI Service
+on Reactor Netty, including incoming W3C trace context
+extraction and OTLP export to Jaeger.
 
 Planned tracing coverage:
 

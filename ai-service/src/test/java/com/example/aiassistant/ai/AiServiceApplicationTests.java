@@ -1,34 +1,67 @@
 package com.example.aiassistant.ai;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.reactor.netty.NettyWebServer;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.boot.web.server.context.WebServerApplicationContext;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.context.ApplicationContext;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.web.reactive.server.WebTestClient;
 
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import java.time.Duration;
 
-@SpringBootTest
-@AutoConfigureMockMvc
+import static org.assertj.core.api.Assertions.assertThat;
+
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT
+)
 @ActiveProfiles("test")
 class AiServiceApplicationTests {
 
-    @Autowired
-    private MockMvc mockMvc;
+    @LocalServerPort
+    private int port;
 
-    @Test
-    void healthEndpointReturnsUp() throws Exception {
-        mockMvc.perform(get("/actuator/health"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("UP"));
+    @Autowired
+    private ApplicationContext applicationContext;
+
+    private WebTestClient webTestClient;
+
+    @BeforeEach
+    void setUp() {
+        webTestClient = WebTestClient.bindToServer()
+                .baseUrl("http://127.0.0.1:" + port)
+                .responseTimeout(Duration.ofSeconds(5))
+                .build();
     }
 
     @Test
-    void environmentEndpointIsNotExposed() throws Exception {
-        mockMvc.perform(get("/actuator/env"))
-                .andExpect(status().isNotFound());
+    void applicationUsesReactorNetty() {
+        assertThat(applicationContext)
+                .isInstanceOfSatisfying(
+                        WebServerApplicationContext.class,
+                        context -> assertThat(context.getWebServer())
+                                .isInstanceOf(NettyWebServer.class)
+                );
+    }
+
+    @Test
+    void healthEndpointReturnsUp() {
+        webTestClient.get()
+                .uri("/actuator/health")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.status").isEqualTo("UP");
+    }
+
+    @Test
+    void environmentEndpointIsNotExposed() {
+        webTestClient.get()
+                .uri("/actuator/env")
+                .exchange()
+                .expectStatus().isNotFound();
     }
 }

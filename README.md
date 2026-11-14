@@ -18,6 +18,8 @@ The current implementation provides:
 
 - Maven multi-module project with centrally managed dependencies.
 - Two independently deployable Spring Boot services.
+- Spring WebFlux and Reactor Netty for AI Service.
+- Spring MVC for Order Service.
 - PostgreSQL with pgvector and isolated database schemas.
 - JDBC and service-owned Flyway migrations.
 - Synthetic orders and order event history.
@@ -28,8 +30,8 @@ The current implementation provides:
 - Actuator health endpoints.
 - OpenTelemetry tracing with Jaeger.
 - Docker Compose infrastructure.
-- Frozen REST and SSE API contracts v0.2.0.
-- Automated unit, MVC and PostgreSQL integration tests.
+- Frozen AI REST/SSE contracts v0.3.0 and Order REST contract v0.2.0.
+- Automated unit, WebFlux, MVC and PostgreSQL integration tests.
 
 Planned business capabilities:
 
@@ -49,7 +51,7 @@ The system consists of two backend services and a planned frontend.
 flowchart LR
     UI["Web UI (planned)"] --> AI["AI Service"]
     AI --> OS["Order Service"]
-    AI --> LLM["OpenAI API (planned)"]
+    AI --> LLM["Configurable LLM providers (planned)"]
     AI --> AIDB["PostgreSQL: ai schema"]
     OS --> ODB["PostgreSQL: orders schema"]
     AI --> J["Jaeger"]
@@ -73,7 +75,8 @@ See [Architecture](docs/ARCHITECTURE.md) for details.
 | Spring Boot | 4.1.2 |
 | Spring AI | 2.0.2, BOM configured |
 | Spring Cloud | 2025.1.4, BOM configured |
-| Spring Web MVC | HTTP API and future SSE streaming |
+| Spring WebFlux / Reactor Netty | AI Service HTTP runtime and future SSE streaming |
+| Spring Web MVC | Order Service REST API |
 | Spring JDBC | Database access |
 | Flyway | Database migrations |
 | PostgreSQL | 16.15 |
@@ -134,7 +137,7 @@ For local Java development:
 A separate Maven installation is not required.
 
 The current Foundation and Order Service implementation
-does not require an OpenAI API key.
+does not require an LLM provider API key.
 
 ## Quick start
 
@@ -368,7 +371,7 @@ On Windows PowerShell:
 The Maven reactor builds both backend modules and executes their tests.
 
 
-The standard Maven verification runs unit, application and MVC tests.
+The standard Maven verification runs unit, application, WebFlux and MVC tests.
 
 Database-independent Spring tests use the `test` profile and
 do not require a running PostgreSQL instance.
@@ -497,7 +500,8 @@ will be introduced with the corresponding functionality.
 
 ## API contracts
 
-The public API contracts are frozen for the MVP at version 0.2.0.
+The AI Service REST and SSE contracts are frozen at version 0.3.0.
+The Order Service REST contract remains frozen at version 0.2.0.
 
 - [AI Service OpenAPI](contracts/ai-service.openapi.yaml)
 - [Order Service OpenAPI](contracts/order-service.openapi.yaml)
